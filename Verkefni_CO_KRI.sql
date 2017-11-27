@@ -242,20 +242,13 @@ CREATE PROCEDURE AddMandtoryCourses( in student_identity int)
 BEGIN
 	DECLARE done INT DEFAULT FALSE;
 	DECLARE C_name CHAR(10);
-	DECLARE recomendedSemester tinyint unsigned;
     
 	declare CourseNameCursor cursor for 
 		select Courses.courseName from Courses
 		inner join TrackCourses on TrackCourses.courseNumber = Courses.courseNumber
 		inner join Tracks on Tracks.trackID = TrackCourses.trackID
 		where TrackCourses.trackID = (select Student.trackID from Student where s_id = student_identity) and TrackCourses.mandatory = 1;
-        
-	declare SemesterCursor cursor for 
-		select TrackCourses.semester from Courses
-		inner join TrackCourses on TrackCourses.courseNumber = Courses.courseNumber
-		inner join Tracks on Tracks.trackID = TrackCourses.trackID
-		where TrackCourses.trackID = (select Student.trackID from Student where s_id = student_identity) and TrackCourses.mandatory = 1;
-	
+     	
 	DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
     
     open CourseNameCursor;
@@ -263,13 +256,12 @@ BEGIN
     
     read_loop: LOOP
 		fetch CourseNameCursor into C_name;
-        fetch SemesterCursor into recomendedSemester;
         if done then
 			leave read_loop;
         end if;
         #my work here
 		#step 1: call addCourse
-        select addCourse(student_identity);
+        select addCourse(student_identity,CourseNameCursor);
         #step 2: profit
         #end my work
 	end loop;
@@ -281,10 +273,20 @@ DELIMITER ;
 call AddMandtoryCourses(1);
 
 DELIMITER ☺
-create function addCourse(nemandi int, course char(10), semesterNumber tinyint)
+create function addCourse(nemandi int, course char(10))
 returns tinyint
 begin
-	set @timed = semesterNumber;
+	DECLARE done INT DEFAULT FALSE;
+	DECLARE C_name CHAR(10);
+	
+	declare CourseNameCursor cursor for 
+		select Courses.restrictorID from Courses
+		where Courses.courseNumber=course;
+		
+	DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+        
+	set @timed = 0;#timed needs to be the last semester that a course was added +1
+    set @sem =0;#place holder for comparison
 	#check if it's not compleated
     if (select not exists(	select Student.s_id from Student															#does not matter what I return (I'm just checking if it returns anything
 							inner join Semester on Semester.s_id = Student.s_id
@@ -296,17 +298,51 @@ begin
     #check if there is a constraint for this course
 		if (select exists(select * from Restrictors where courseNumber = course))
         then
-			#a course needs to be added
-            #add the course it self(in the returned semester value)
-			select 2+2;
+			#a course(s) needs to be added
+            open CourseNameCursor;
+			open SemesterCursor;
+			
+			read_loop: LOOP
+				fetch CourseNameCursor into C_name;
+				if done then
+					leave read_loop;
+				end if;
+				set @sem = addCourse(student_identity,C_name);
+                if (@sem>@timed) then set @timed = @sem;end if;
+			end loop;
+			
+			close CourseNameCursor;
+			close SemesterCursor;
+            #add the course it self
+            insert into CourseSemester(semesterID,courseNumber) values ((select id from Semester where semNumber=@timed and s_id = student_identity),course);
 		else
 			#check what semester the course needs to be set
-			select 2+2;
+			if((select count(scedualed-now()) where scedualed-now()>0)>0)#if there are upcoming courses
+            then
+				set @timed = (select min(scedualed-now()) where scedualed-now()>0);
+            else
+				set @timed = (select max(semNumber)+1 from Semester where s_id = student_identity);
+			end if;
+			insert into CourseSemester(semesterID,courseNumber) values ((select id from Semester where semNumber=@timed and s_id = student_identity),course);
         end if;
     end if;
-    return @timed;
+    return @timed+1;
 end☺
 DELIMITER ;
+
+#trigger to insert into semseter table before insert on coursesemester table
+DELIMITER ☺
+create trigger insertIntoSemester before insert on CourseSemester
+for each row
+begin
+    if(SELECT EXISTS(SELECT * FROM Semester WHERE id = new.semesterID)) then
+		set new.courseNumber=null;
+        signal sqlstate '45000' set message_text = 'TriggerError: courseNumber and RestrictorID can not be the same';
+    end if;
+end ☺
+DELIMITER;
+
+
 
 /*Verkefni 3*/
 /*dæmi 1*/
