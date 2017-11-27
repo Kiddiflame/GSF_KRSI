@@ -1,4 +1,10 @@
+/*
+Created by: Sigurður Orri Hjaltason (and Kristinn)
+Creation year:2017
+*/
+
 drop database if exists 0405993209_ProgressTracker_V1;
+use 0405993209_ProgressTracker_V1;
 
 select sum(Courses.courseCredits) 
 from TrackCourses
@@ -137,6 +143,7 @@ group by x;
 
 /*Skilaverkefni 2*/
 /*dæmi 1*/
+drop table if exists Student;
 create table Student
 (
 	s_id int primary key auto_increment,
@@ -144,43 +151,176 @@ create table Student
     s_ln varchar(100),
 	s_email varchar(120),
     trackID int,
-    foreign key (selectedTrack) references Tracks(trackID)
+    foreign key (trackID) references Tracks(trackID)
 );
 drop PROCEDURE if exists SkraNemanda;
 DELIMITER ☺
 CREATE PROCEDURE SkraNemanda(in firstName varchar(100), in lastName varchar(100), in email varchar(120), in Track varchar(75))
 begin
-	set TrackID = (select trackID from Tracks where trackName = Track);
-	insert into Students(s_fn,s_ln,S_email,treackID)
+	set @TrackID = (select trackID from Tracks where trackName = Track);
+	insert into Student(s_fn,s_ln,S_email,trackID)
     values 
-    (firstName,lastName, email,TrackID);
+    (firstName,lastName, email,@TrackID);
 end ☺
 DELIMITER ;
 call SkraNemanda ("siggi","orri","askurinnminn@gmail.com","Tölvubraut TBR16 - stúdentsbraut");
+select * from Student;
 
-
+drop table if exists CourseSemester;
+drop table if exists Semester;
 create table Semester
 (
-	id int primary key auto_increment,
+	id int auto_increment,
+	semNumber tinyint,
+	scedualed date,
 	s_id int,
+    constraint restrictor_PK primary key (id),
+    constraint restrictor_unq unique (semNumber,s_id),
     FOREIGN KEY (s_id) REFERENCES student(s_id)
+
 );
+drop table if exists CourseSemester;
 create table CourseSemester
 (
-	semesterID int foreign key references Semester(id)
-    courseNumber char(10) foreign key references Courses
-)
+	semesterID int,
+    courseNumber char(10),
+    grade double default null,
+    foreign key (semesterID) references Semester(id),
+    foreign key (courseNumber) references Courses(courseNumber)
+);
 
 /*dæmi 2*/
+drop trigger if exists InsertDenial;
 DELIMITER ☺
-create trigger UpdateDenial after insert on Restrictors 
+create trigger InsertDenial before insert on Restrictors 
 for each row
 begin
-    if exists ( select * from Restrictors where Restrictors.courseNumber = Restrictors.restrictorID)
-        rollback transaction
-        raiserror ('some message', 16, 1)
+    if( new.courseNumber = new.RestrictorID) then
+		set new.courseNumber=null;
+        signal sqlstate '45000' set message_text = 'TriggerError: courseNumber and RestrictorID can not be the same';
     end if;
 end ☺
 DELIMITER ;
+insert into Restrictors values('GSF2B3U','GSF2B3U',1);
+
+/*dæmi 3*/
+drop trigger if exists UpdateDenial;
+DELIMITER ☺
+create trigger UpdateDenial before update on Restrictors 
+for each row
+begin
+    if( new.courseNumber = new.RestrictorID) then
+		set new.courseNumber=null;
+        signal sqlstate '45000' set message_text = 'TriggerError: courseNumber and RestrictorID can not be the same';
+    end if;
+end ☺
+DELIMITER ;
+update Restrictors
+set courseNumber = 'GSF2B3U' where RestrictorID = 'GSF2B3U';
 
 
+/*dæmi 4*/
+drop PROCEDURE if exists einingarHeild;
+DELIMITER ☺
+CREATE PROCEDURE einingarHeild(in person int)
+begin
+	select sum(Courses.courseCredits) from Student
+    Left join Semester on Semester.s_id = Student.s_id
+    Left join CourseSemester on CourseSemester.semesterID = Semester.id
+    Left join Courses on CourseSemester.courseNumber = Courses.courseNumber
+    where CourseSemester.grade >=5 and Student.s_id=person;
+end ☺
+DELIMITER ;
+commit;
+call einingarHeild(1);
+rollback;
+
+/*dæmi 5*/
+drop procedure if exists AddMandtoryCourses;
+DELIMITER ☺
+CREATE PROCEDURE AddMandtoryCourses( in student_identity int)
+BEGIN
+	DECLARE done INT DEFAULT FALSE;
+	DECLARE C_name CHAR(10);
+	DECLARE recomendedSemester tinyint unsigned;
+    
+	declare CourseNameCursor cursor for 
+		select Courses.courseName from Courses
+		inner join TrackCourses on TrackCourses.courseNumber = Courses.courseNumber
+		inner join Tracks on Tracks.trackID = TrackCourses.trackID
+		where TrackCourses.trackID = (select Student.trackID from Student where s_id = student_identity) and TrackCourses.mandatory = 1;
+        
+	declare SemesterCursor cursor for 
+		select TrackCourses.semester from Courses
+		inner join TrackCourses on TrackCourses.courseNumber = Courses.courseNumber
+		inner join Tracks on Tracks.trackID = TrackCourses.trackID
+		where TrackCourses.trackID = (select Student.trackID from Student where s_id = student_identity) and TrackCourses.mandatory = 1;
+	
+	DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+    
+    open CourseNameCursor;
+    open SemesterCursor;
+    
+    read_loop: LOOP
+		fetch CourseNameCursor into C_name;
+        fetch SemesterCursor into recomendedSemester;
+        if done then
+			leave read_loop;
+        end if;
+        #my work here
+		#step 1: call addCourse
+        select addCourse(student_identity);
+        #step 2: profit
+        #end my work
+	end loop;
+    
+    close CourseNameCursor;
+    close SemesterCursor;
+END ☺
+DELIMITER ;
+call AddMandtoryCourses(1);
+
+DELIMITER ☺
+create function addCourse(nemandi int, course char(10), semesterNumber tinyint)
+returns tinyint
+begin
+	set @timed = semesterNumber;
+	#check if it's not compleated
+    if (select not exists(	select Student.s_id from Student															#does not matter what I return (I'm just checking if it returns anything
+							inner join Semester on Semester.s_id = Student.s_id
+							inner join CourseSemester on CourseSemester.semesterID = Semester.id
+							inner join Courses on CourseSemester.courseNumber = Courses.courseNumber
+							where CourseSemester.grade >=5 and Student.s_id=nemandi and CourseSemester.courseName = course
+                            ))
+	then
+    #check if there is a constraint for this course
+		if (select exists(select * from Restrictors where courseNumber = course))
+        then
+			#a course needs to be added
+            #add the course it self(in the returned semester value)
+			select 2+2;
+		else
+			#check what semester the course needs to be set
+			select 2+2;
+        end if;
+    end if;
+    return @timed;
+end☺
+DELIMITER ;
+
+/*Verkefni 3*/
+/*dæmi 1*/
+drop PROCEDURE if exists SemesterInfo;#concat
+DELIMITER ☺
+CREATE PROCEDURE SemesterInfo()
+begin
+	drop table if exists jsonTable;
+	create TEMPORARY table jsonTable (jdoc JSON);
+    INSERT INTO jsonTable VALUES('{"Semester": {"Nemendur":{}}}');
+end ☺
+DELIMITER ;
+call SemesterInfo();
+rollback;
+set @j = 4;
+SELECT JSON_OBJECT('id',  @j, 'name', 'carrot');
+SHOW VARIABLES LIKE "%version%";
